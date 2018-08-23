@@ -1,0 +1,8 @@
+<Flows>
+    <Flow Name="FlowName">
+        <DataSources>
+            <DataSource ListName="List1"/>
+            <DataSource ListName="List2"/>
+        </DataSources>
+    </Flow>
+</Flows>

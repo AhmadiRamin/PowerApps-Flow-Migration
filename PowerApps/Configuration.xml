@@ -1,0 +1,8 @@
+<Apps>
+    <App Name="AppName" Id="AppId">
+        <DataSources>
+            <DataSource ListName="List1"/>
+			<DataSource ListName="List2"/>
+        </DataSources>
+    </App>
+</Apps>
