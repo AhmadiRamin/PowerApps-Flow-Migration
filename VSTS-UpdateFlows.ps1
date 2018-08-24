@@ -6,7 +6,7 @@
 
 .DESCRIPTION
 	Uses Office Dev PnP to provisiong all IA artefacts
-   
+
 .PARAMETER
 		-FilePath
 .INPUTS
@@ -21,7 +21,7 @@
   Author:         Ramin Ahmadi
   Creation Date:  11/11/2017
   Purpose/Change: First version
-  
+
 .EXAMPLE
 .\VSTS-UpdateFlows.ps1 -SourceSiteUrl https://contoso.sharepoint.com/sites/myapps -SourceUserName ramin.ahmadi@contoso.com -SourcePassword **** -TargetSiteUrl https://raminahmadi.sharepoint.com/sites/myapps -TargetUserName ramin@raminahmadi.onmicrosoft.com -TargetPassword **** -FormsLocation "C:\Development\PowerShell\FlowsPackages"
 
@@ -67,13 +67,13 @@ function Update-AppData(){
             Write-Host "Flow : $($FlowName)"
             # Extract the package
             Expand-Archive -LiteralPath "$($FlowsLocation)\$($FlowName).zip" -DestinationPath "$($FlowsDirectory)$($FlowName)" -Force
-    
+
             # Update App confige file
             $DefinitionFilePath = Get-ChildItem -Path "$($FlowsDirectory)$($FlowName)\" -Filter definition.json -Recurse| Select-Object -First 1
             Update-JsonFile $DefinitionFilePath.FullName $_
             # Compress the package
             Compress-Archive -Path "$($FlowsDirectory)\$($FlowName)\*" -DestinationPath "$($NewPackagesDirectory)\$($FlowName)"
-  
+
         }
        catch{
             Write-Host $_.Exception.Message
@@ -94,7 +94,7 @@ function Update-JsonFile($Path,$App){
         $App.DataSources.DataSource | ForEach-Object{
           $sourceListName =  $_.ListName
           $sourceListId = Get-ListId $SourceSiteUrl $SourceUserName $SourcePassword $sourceListName
-          $targetListId = Get-ListId $TargetSiteUrl $TargetUserName $TargetPassword $sourceListName              
+          $targetListId = Get-ListId $TargetSiteUrl $TargetUserName $TargetPassword $sourceListName
           $json=$json.Replace($sourceListId,$targetListId)
         }
         $json=(Convertfrom-Json $json)
