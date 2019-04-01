@@ -23,29 +23,18 @@
   Purpose/Change: First version
 
 .EXAMPLE
-.\VSTS-UpdatePowerAppsData.ps1 -AppsLocation C:\Development\PowerShell\powerapps -SourceSiteUrl https://contoso.sharepoint.com/sites/dcratdev -SourceUserName ramin.ahmadi@contoso.com -SourcePassword *** -TargetSiteUrl https://raminahmadi.sharepoint.com/sites/rat -TargetUserName ramin.ahmadi@raminahmadi.com -TargetPassword ***
+.\VSTS-UpdatePowerAppsData.ps1 -SourceSiteUrl https://contoso.sharepoint.com/sites/dcratdev -TargetSiteUrl https://raminahmadi.sharepoint.com/sites/rat
 
 #>
 #---------------------------------------------------------[Initialisations]--------------------------------------------------------
 #Parameters
-Param(
-    #Location which app packages are located
-    [Parameter(Mandatory = $True)]
-    [string]$AppsLocation,
+Param(    
     #Source information
     [Parameter(Mandatory = $True)]
     [string]$SourceSiteUrl,
-    [Parameter(Mandatory = $True)]
-    [string]$SourceUserName,
-    [Parameter(Mandatory = $True)]
-    [string]$SourcePassword,
     #Target information
     [Parameter(Mandatory = $True)]
-    [string]$TargetSiteUrl,
-    [Parameter(Mandatory = $True)]
-    [string]$TargetUserName,
-    [Parameter(Mandatory = $True)]
-    [string]$TargetPassword
+    [string]$TargetSiteUrl
 )
 
 #region Set Global Variables--------------------------------------------------------------------------------------------------
@@ -54,59 +43,96 @@ Param(
 
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 # Get app from configuration file
-[xml]$ConfigurationContent = Get-Content "$($AppsLocation)\configuration.xml"
-$AppsDirectory = $Env:SYSTEM_DEFAULTWORKINGDIRECTORY + "\apps\"
-$MsappDirectory = $Env:SYSTEM_DEFAULTWORKINGDIRECTORY + "\msapp\"
-$NewPackagesDirectory = $Env:SYSTEM_DEFAULTWORKINGDIRECTORY + "\newpackages\"
-New-Item -ItemType directory -Path $NewPackagesDirectory
+#[xml]$ConfigurationContent = Get-Content "$($AppsLocation)\configuration.xml"
+$CurrFolderName = $(Get-Location).Path
+$PowerAppsDirectory = "$currFolderName\PowerApps"
+$TempDirectory = "$currFolderName\temp"
+
+#New-Item -ItemType directory -Path $NewPackagesDirectory
 #-----------------------------------------------------------[Functions]------------------------------------------------------------
 
 function Update-AppData() {
-    $ConfigurationContent.Apps.App | ForEach-Object {
-        $AppName = $_.Name
-        $AppId = $_.Id
-        Write-Host "App Name: $($AppName)"
+    $files = Get-ChildItem $PowerAppsDirectory -Filter *.zip 
+    $files | ForEach-Object {
+        $Name = $_.Name
+        $Path = $_.FullName
+        $TempFolder = "$TempDirectory\$Name"
+        Write-Host "App Name: $Name"
+        
         # Extract the package
-        Expand-Archive -LiteralPath "$($AppsLocation)\$($AppName).zip" -DestinationPath "$($AppsDirectory)$($AppName)" -Force
+        Expand-Archive -LiteralPath $Path -DestinationPath $TempFolder -Force
+        
         # Rename .msapp file to zip so we can extract it
-        Get-ChildItem -Path "$($AppsDirectory)\$($AppName)" -Filter *.msapp  -Recurse| Select-Object -First 1 | Rename-Item -NewName {$_.name -Replace '\.msapp', '.zip'}
+        Get-ChildItem -Path $TempFolder -Filter *.msapp  -Recurse | Select-Object -First 1 | Rename-Item -NewName { $_.name -Replace '\.msapp', '.zip' }                
+
         # Extract app contents
-        $MsappFile = Get-ChildItem -Path "$($AppsDirectory)$($AppName)" -Filter *.zip  -Recurse| Select-Object -First 1
-        Expand-Archive -LiteralPath $MsappFile.FullName -DestinationPath "$($MsappDirectory)\$($AppName)" -Force
+        $MsappFile = Get-ChildItem -Path $TempFolder -Filter *.zip  -Recurse | Select-Object -First 1
+        $MsappDirectory = (Get-Item $MsappFile.FullName).Directory.FullName
+        $MsappExpandDirectoryName = $MsappFile.BaseName
+        $MsappExpandDirectoryPath = "$MsappDirectory\$MsappExpandDirectoryName"
+        Expand-Archive -LiteralPath $MsappFile.FullName -DestinationPath $MsappExpandDirectoryPath -Force
+
+        # Find data sources
+        $EntitiesFile = (Get-Content "$MsappExpandDirectoryPath\entities.json" -Raw) | ConvertFrom-Json
+        $SourceDataSources = $EntitiesFile.Entities | Where-Object { $_.type -eq "ConnectedDataSourceInfo" } | Select-Object -Property Name, TableName
+        $TargetDataSources = Get-DataSources -SourceSiteUrl $SourceDataSources
         # Update App confige file
-        $ConfigFilePath = $AppsDirectory + "$($AppName)\Microsoft.PowerApps\apps\$($AppId)\$($AppId).json"
-        Update-JsonFile $ConfigFilePath $_
-        $PropertiesFilePath = $MsappDirectory + "$($AppName)\Properties.json"
-        Update-JsonFile $PropertiesFilePath $_
-        $EntitiesFilePath = $MsappDirectory + "$($AppName)\Entities.json"
-        Update-JsonFile $EntitiesFilePath $_
+        $AppId = (Get-Item $MsappDirectory ).BaseName
+        $ConfigFilePath = "$MsappDirectory\$($AppId).json"
+        Update-JsonFile -Path $ConfigFilePath -SourceDataSources $SourceDataSources -TargetDataSources $TargetDataSources
+        $PropertiesFilePath = "$MsappExpandDirectoryPath\roperties.json"
+        Update-JsonFile -Path $PropertiesFilePath -SourceDataSources $SourceDataSources -TargetDataSources $TargetDataSources
+        $EntitiesFilePath = "$MsappExpandDirectoryPath\Entities.json"
+        Update-JsonFile -Path $EntitiesFilePath -SourceDataSources $SourceDataSources -TargetDataSources $TargetDataSources
         # Update App Flows
-        Update-Flows $_
+        # Update-Flows $_
         # Rename .zip file to .msapp
-        Get-ChildItem -Path "$($AppsDirectory)\$($AppName)" -Filter *.zip  -Recurse| Select-Object -First 1 | Rename-Item -NewName {$_.name -Replace '\.zip', '.msapp'}
+        Get-ChildItem -Path "$MsappDirectory" -Filter *.zip  -Recurse | Select-Object -First 1 | Rename-Item -NewName { $_.name -Replace '\.zip', '.msapp' }
         # Insert updated files directly to the zip file
-        Insert-UpdatedFilesToPackage $AppName
-        # Compress the package
-        Compress-Archive -Path "$($AppsDirectory)\$($AppName)\*" -DestinationPath "$($NewPackagesDirectory)\$($AppName)"
+        Insert-UpdatedFilesToPackage -AppDirectory "$MsappDirectory" -ExpandedPath "$MsappExpandDirectoryPath"
+
     }
     # Compress all packages into one zip file
-    Compress-Archive -Path "$($NewPackagesDirectory)\*.zip" -DestinationPath "$($NewPackagesDirectory)\PowerAppsForms"
+    # Compress-Archive -Path "$($NewPackagesDirectory)\*.zip" -DestinationPath "$($NewPackagesDirectory)\PowerAppsForms"
 }
 
-function Update-JsonFile($Path, $App) {
+function Get-DataSources($SourceDataSources){
+    $TargetDataSources = @()
+    try {                
+        Connect-PnPOnline -Url $SiteUrl -UseWebLogin  
+        # Replace data sources
+        DataSources | ForEach-Object {
+            $NewDataSource = New-Object System.Object
+            $SourceListName = $_.ListName
+            $targetListId = Get-PnPList -Identity "$SourceListName"
+            $NewDataSource | Add-Member -type NoteProperty -name Name -Value "$SourceListName"
+            $NewDataSource | Add-Member -type NoteProperty -name Id -Value "$($targetListId.Id)"
+            $TargetDataSources += $NewDataSource
+        }
+        $json = (ConvertFrom-Json $json)
+        $json | ConvertTo-Json -Depth 60 | Set-Content $Path
+    }
+    catch {
+        Write-Host $_.Exception.Message
+    }
+    return $TargetDataSources
+}
+function Update-JsonFile($Path, $SourceDataSources, $TargetDataSources) {
     try {
         # Get file content
         $json = Get-Content $Path | Out-String
         # Replace all source url to target url
         $json = $json.Replace($SourceSiteUrl, $TargetSiteUrl)
+        
         # Replace data sources
-        $App.DataSources.DataSource | ForEach-Object {
-            $sourceListName = $_.ListName
-            $sourceListId = Get-ListId $SourceSiteUrl $SourceUserName $SourcePassword $sourceListName
-            $targetListId = Get-ListId $TargetSiteUrl $TargetUserName $TargetPassword $sourceListName
-            $json = $json.Replace($sourceListId, $targetListId)
+        DataSources | ForEach-Object {
+            $SourceListName = $_.Name
+            $SourceListId = $_.TableName
+            $TargetItem =  $TargetDataSources | ?{$_.Name -eq "$($SourceListName)"}
+            $targetListId = $TargetItem.Id
+            $json = $json.Replace($SourceListId, $targetListId)
         }
-        $json = (Convertfrom-Json $json)
+        $json = (ConvertFrom-Json $json)
         $json | ConvertTo-Json -Depth 60 | Set-Content $Path
     }
     catch {
@@ -133,7 +159,7 @@ function Update-Flows($App) {
                     $targetListId = Get-ListId $TargetSiteUrl $TargetUserName $TargetPassword $sourceListName
                     $json = $json.Replace($sourceListId, $targetListId)
                 }
-                $json = (Convertfrom-Json $json)
+                $json = (ConvertFrom-Json $json)
                 $json | ConvertTo-Json -Depth 40 | Set-Content $Path
             }
             catch {
@@ -143,10 +169,10 @@ function Update-Flows($App) {
     }
 }
 
-function Insert-UpdatedFilesToPackage($AppName) {
-    $MsappFilePath = Get-ChildItem -Path "$($AppsDirectory)$($AppName)\" -Filter *.msapp  -Recurse| Select-Object -First 1    
-    $PropertiesFilePath = $MsappDirectory + "$($AppName)\Properties.json"
-    $EntitiesFilePath = $MsappDirectory + "$($AppName)\Entities.json"
+function Insert-UpdatedFilesToPackage($AppsDirectory,$ExpandedPath) {
+    $MsappFilePath = Get-ChildItem -Path "$AppsDirectory\" -Filter *.msapp  -Recurse | Select-Object -First 1    
+    $PropertiesFilePath = "$ExpandedPath\Properties.json"
+    $EntitiesFilePath = "$ExpandedPath\Entities.json"
     # Open the .msapp file for updating
     $zip = [System.IO.Compression.ZipFile]::Open($MsappFilePath.FullName, "Update")
     # Remove existing properties.json and Entities.json
@@ -165,13 +191,20 @@ function Insert-UpdatedFilesToPackage($AppName) {
     $zip.Dispose()
 }
 
-function Get-ListId($SiteUrl, $Username, $Password, $ListName) {
-    $pw = $Password
-    $securePassword = $pw | ConvertTo-SecureString -AsPlainText -Force
-    $SPCred = New-Object system.management.automation.pscredential -ArgumentList $Username, $securePassword
-    Connect-PnPOnline -Url $SiteUrl -credential $SPCred
-    $List = Get-PnPList -Identity "$($ListName)"
-    return $List.Id
+function Pre-Actions() {
+    if (Test-Path $TempDirectory) {
+        Write-Host "Folder temp already exists."
+    }
+    else {
+        Write-Host "Creating temp folder..."
+        New-Item -ItemType directory -Path $TempDirectory
+    }
+
 }
 
+function Post-Actions {
+    Remove-Item –Path $TempDirectory –recurse
+}
+Pre-Actions
 Update-AppData
+#Post-Actions
